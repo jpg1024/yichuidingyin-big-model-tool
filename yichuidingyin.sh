@@ -92,7 +92,7 @@ show_welcome() {
   
        一锤定音大模型工具 (CHUIZI) - 版本 1.0
        作者：锤子代码（公众号）
-       代码仓库：https://github.com/pruidong/yichuidingyin-big-model-tool
+       代码仓库：https://github.com/jpg1024/yichuidingyin-big-model-tool
   
 EOF
     echo -e "欢迎使用一锤定音大模型工具！\n"
@@ -470,7 +470,7 @@ EOF
 # 模型: $MODEL_ID
 # 模型类型: $MODEL_TYPE
 
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt --server_port 6006
 
 EOF
 
@@ -481,7 +481,7 @@ EOF
 # 模型: $MODEL_ID
 # 模型类型: $MODEL_TYPE
 
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096 --server_port 6006
 
 EOF
 
@@ -496,7 +496,8 @@ CUDA_VISIBLE_DEVICES=0 swift deploy \\
     --model "$TARGET_DIR" \\
     --model_type "$MODEL_TYPE" \\
     --infer_backend pt \\
-    --served_model_name $MODEL_NAME
+    --served_model_name $MODEL_NAME \\
+    --port 6008
 
 EOF
 
@@ -512,7 +513,8 @@ CUDA_VISIBLE_DEVICES=0 swift deploy \\
     --model_type "$MODEL_TYPE" \\
     --infer_backend vllm \\
     --served_model_name $MODEL_NAME \\
-    --vllm_max_model_len 4096
+    --vllm_max_model_len 4096 \\
+    --port 6008
 
 EOF
 
@@ -604,7 +606,7 @@ swift sft \\
 EOF
 
     # 生成微调后推理参考脚本
-    cat > "$INFER_AFTER_FINETUNE_SCRIPT" << 'EOF'
+    cat > "$INFER_AFTER_FINETUNE_SCRIPT" << EOF
 #!/bin/bash
 # 微调后推理参考脚本
 
@@ -623,7 +625,7 @@ swift infer \
 EOF
 
     # 生成合并微调脚本
-    cat > "$MERGE_FINETUNE_SCRIPT" << 'EOF'
+    cat > "$MERGE_FINETUNE_SCRIPT" << EOF
 #!/bin/bash
 # 合并微调脚本
 

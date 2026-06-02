@@ -2,13 +2,12 @@
 
 # ==============================================================================
 # 一锤定音大模型工具 (CHUIZI)
-# 版本：1.0
+# 版本：1.1 (增加微调与vLLM选项控制)
 # 作者：锤子代码（公众号）
 # 功能：交互式下载大模型，生成推理脚本和微调脚本
 # ==============================================================================
 
 set -euo pipefail
-
 
 # 全局变量
 MODEL_ID=""
@@ -28,6 +27,10 @@ LORA_ALPHA=32
 NUM_EPOCHS=1
 MAX_LENGTH=2048
 TARGET_MODULES="all-linear"
+
+# 新增控制变量
+NEED_FINETUNE="n"
+USE_VLLM="n"
 
 # 检查是否安装了必要的工具
 check_dependencies() {
@@ -66,7 +69,7 @@ check_dependencies() {
         echo -e "ms-swift 已安装"
     fi
     
-    # 检查并安装 vllm
+    # 检查并安装 vllm (仅在需要时安装，但为保持兼容性先保留检查)
     if ! python3 -c "import vllm" &> /dev/null; then
         echo -e "vllm 未安装，正在安装..."
         if ! python3 -m pip install vllm --upgrade; then
@@ -77,7 +80,7 @@ check_dependencies() {
         echo -e "vllm 已安装"
     fi
     
-    echo -e "依赖检查通过"
+    echo -e "依赖检查通过\n"
 }
 
 # 显示欢迎信息
@@ -90,9 +93,9 @@ show_welcome() {
   \___| |_||_|  \___/  |___| /___| |___| |___/  /_/ \_\ |___| |_|  |_| /_/ \_\
                                                                               
   
-       一锤定音大模型工具 (CHUIZI) - 版本 1.0
+       一锤定音大模型工具 (CHUIZI) - 版本 1.1
        作者：锤子代码（公众号）
-       代码仓库：https://github.com/jpg1024/yichuidingyin-big-model-tool
+       代码仓库：https://github.com/pruidong/yichuidingyin-big-model-tool
   
 EOF
     echo -e "欢迎使用一锤定音大模型工具！\n"
@@ -130,7 +133,7 @@ select_download_site() {
 # 获取模型ID
 get_model_id() {
     while true; do
-        read -p "$(echo -e '请输入模型ID (例如: Qwen/Qwen3-8B): ')" MODEL_ID
+        read -p "$(echo -e '请输入模型ID (例如: Qwen/Qwen2.5-7B-Instruct): ')" MODEL_ID
         
         if [[ -z "$MODEL_ID" ]]; then
             echo -e "模型ID不能为空，请重新输入"
@@ -153,9 +156,9 @@ get_model_id() {
 
 # 获取模型类型
 get_model_type() {
-    echo -e "请参考以下文档选择正确的模型类型：\n\n"
-    echo -e "https://swift.readthedocs.io/zh-cn/latest/Instruction/%E6%94%AF%E6%8C%81%E7%9A%84%E6%A8%A1%E5%9E%8B%E5%92%8C%E6%95%B0%E6%8D%AE%E9%9B%86.html"
-    echo -e "\n\n在文档中查找'Model Type'列，选择与您下载的模型匹配的类型"
+    echo -e "请参考以下文档选择正确的模型类型：\n"
+    echo -e "https://swift.readthedocs.io/zh-cn/latest/Instruction/Supported-models-and-datasets.html"
+    echo -e "\n在文档中查找'Model Type'列，选择与您下载的模型匹配的类型"
     
     while true; do
         read -p "$(echo -e '请输入模型类型: ')" MODEL_TYPE
@@ -242,9 +245,56 @@ select_download_option() {
     echo
 }
 
+# 询问是否微调
+ask_finetune_option() {
+    echo -e "请问是否需要配置微调参数并生成微调脚本？"
+    while true; do
+        read -p "$(echo -e '输入选项 [y/n]: ')" choice
+        case $choice in
+            [Yy]* )
+                NEED_FINETUNE="y"
+                echo -e "已选择: 是，将配置微调参数。\n"
+                break
+                ;;
+            [Nn]* )
+                NEED_FINETUNE="n"
+                echo -e "已选择: 否，将跳过微调配置。\n"
+                break
+                ;;
+            * )
+                echo -e "无效选项，请输入 y 或 n"
+                ;;
+        esac
+    done
+}
+
+# 询问是否使用 vLLM
+ask_vllm_option() {
+    echo -e "请问是否需要生成 vLLM 相关的推理脚本？"
+    echo -e "(注: vLLM 推理速度更快，但通常需要更大的显存。若显存有限，建议选择 n 仅使用 PT 引擎)"
+    while true; do
+        read -p "$(echo -e '输入选项 [y/n]: ')" choice
+        case $choice in
+            [Yy]* )
+                USE_VLLM="y"
+                echo -e "已选择: 是，将生成 vLLM 相关脚本。\n"
+                break
+                ;;
+            [Nn]* )
+                USE_VLLM="n"
+                echo -e "已选择: 否，将仅生成 PT (PyTorch/HuggingFace) 引擎脚本。\n"
+                break
+                ;;
+            * )
+                echo -e "无效选项，请输入 y 或 n"
+                ;;
+        esac
+    done
+}
+
 # 配置微调参数
 configure_finetune_params() {
-    echo -e "\n配置微调参数："
+    echo -e "\n--- 配置微调参数 ---"
     
     # 输出目录
     FINETUNE_OUTPUT_DIR="$TARGET_DIR/lora"
@@ -423,14 +473,16 @@ generate_inference_scripts() {
     
     # 推理脚本文件名
     INFERENCE_PT_SCRIPT="$SCRIPTS_DIR/1-命令行推理-pt.sh"
-    INFERENCE_VLLM_SCRIPT="$SCRIPTS_DIR/1-命令行推理-vllm.sh"
     APP_PT_SCRIPT="$SCRIPTS_DIR/2-界面推理-pt.sh"
-    APP_VLLM_SCRIPT="$SCRIPTS_DIR/2-界面推理-vllm.sh"
     DEPLOY_PT_SCRIPT="$SCRIPTS_DIR/3-API接口-pt.sh"
+    
+    INFERENCE_VLLM_SCRIPT="$SCRIPTS_DIR/1-命令行推理-vllm.sh"
+    APP_VLLM_SCRIPT="$SCRIPTS_DIR/2-界面推理-vllm.sh"
     DEPLOY_VLLM_SCRIPT="$SCRIPTS_DIR/3-API接口-vllm.sh"
+    
     UPGRADE_SCRIPT="/root/7-升级_ms_swift.sh"
     
-    # 生成PT引擎命令行推理脚本
+    # 1. 生成PT引擎命令行推理脚本 (总是生成)
     cat > "$INFERENCE_PT_SCRIPT" << EOF
 #!/bin/bash
 # PT引擎命令行推理脚本
@@ -443,11 +495,35 @@ CUDA_VISIBLE_DEVICES=0 swift infer \\
     --stream true \\
     --infer_backend pt \\
     --max_new_tokens 2048
-
 EOF
 
-    # 生成VLLM引擎命令行推理脚本
-    cat > "$INFERENCE_VLLM_SCRIPT" << EOF
+    # 2. 生成PT引擎Web界面推理脚本 (总是生成)
+    cat > "$APP_PT_SCRIPT" << EOF
+#!/bin/bash
+# PT引擎Web界面推理脚本
+# 模型: $MODEL_ID
+# 模型类型: $MODEL_TYPE
+
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt
+EOF
+
+    # 3. 生成PT引擎API部署脚本 (总是生成)
+    cat > "$DEPLOY_PT_SCRIPT" << EOF
+#!/bin/bash
+# PT引擎API服务部署脚本
+# 模型: $MODEL_ID
+# 模型类型: $MODEL_TYPE
+
+CUDA_VISIBLE_DEVICES=0 swift deploy \\
+    --model "$TARGET_DIR" \\
+    --model_type "$MODEL_TYPE" \\
+    --infer_backend pt \\
+    --served_model_name $MODEL_NAME
+EOF
+
+    # 4. 根据用户选择生成 VLLM 脚本
+    if [[ "$USE_VLLM" == "y" || "$USE_VLLM" == "Y" ]]; then
+        cat > "$INFERENCE_VLLM_SCRIPT" << EOF
 #!/bin/bash
 # VLLM引擎命令行推理脚本
 # 模型: $MODEL_ID
@@ -460,49 +536,18 @@ CUDA_VISIBLE_DEVICES=0 swift infer \\
     --infer_backend vllm \\
     --max_new_tokens 2048 \\
     --vllm_max_model_len 4096
-
 EOF
 
-    # 生成PT引擎Web界面推理脚本
-    cat > "$APP_PT_SCRIPT" << EOF
-#!/bin/bash
-# PT引擎Web界面推理脚本
-# 模型: $MODEL_ID
-# 模型类型: $MODEL_TYPE
-
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt --server_port 6006
-
-EOF
-
-    # 生成VLLM引擎Web界面推理脚本
-    cat > "$APP_VLLM_SCRIPT" << EOF
+        cat > "$APP_VLLM_SCRIPT" << EOF
 #!/bin/bash
 # VLLM引擎Web界面推理脚本
 # 模型: $MODEL_ID
 # 模型类型: $MODEL_TYPE
 
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096 --server_port 6006
-
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096
 EOF
 
-    # 生成PT引擎API部署脚本
-    cat > "$DEPLOY_PT_SCRIPT" << EOF
-#!/bin/bash
-# PT引擎API服务部署脚本
-# 模型: $MODEL_ID
-# 模型类型: $MODEL_TYPE
-
-CUDA_VISIBLE_DEVICES=0 swift deploy \\
-    --model "$TARGET_DIR" \\
-    --model_type "$MODEL_TYPE" \\
-    --infer_backend pt \\
-    --served_model_name $MODEL_NAME \\
-    --port 6008
-
-EOF
-
-    # 生成VLLM引擎API部署脚本
-    cat > "$DEPLOY_VLLM_SCRIPT" << EOF
+        cat > "$DEPLOY_VLLM_SCRIPT" << EOF
 #!/bin/bash
 # VLLM引擎API服务部署脚本
 # 模型: $MODEL_ID
@@ -513,12 +558,17 @@ CUDA_VISIBLE_DEVICES=0 swift deploy \\
     --model_type "$MODEL_TYPE" \\
     --infer_backend vllm \\
     --served_model_name $MODEL_NAME \\
-    --vllm_max_model_len 4096 \\
-    --port 6008
-
+    --vllm_max_model_len 4096
 EOF
+        chmod +x "$INFERENCE_VLLM_SCRIPT"
+        chmod +x "$APP_VLLM_SCRIPT"
+        chmod +x "$DEPLOY_VLLM_SCRIPT"
+        echo -e "  ✓ vLLM 推理脚本生成成功"
+    else
+        echo -e "  ⚠ 已跳过 vLLM 脚本生成"
+    fi
 
-    # 生成ms-swift升级脚本
+    # 5. 生成ms-swift升级脚本 (总是生成)
     cat > "$UPGRADE_SCRIPT" << 'EOF'
 #!/bin/bash
 # 升级ms-swift脚本
@@ -542,19 +592,15 @@ pip install -e .
 cd ..
 
 echo "ms-swift升级完成！"
-
 EOF
 
-    # 赋予执行权限
+    # 赋予执行权限 (PT 脚本和升级脚本)
     chmod +x "$INFERENCE_PT_SCRIPT"
-    chmod +x "$INFERENCE_VLLM_SCRIPT"
     chmod +x "$APP_PT_SCRIPT"
-    chmod +x "$APP_VLLM_SCRIPT"
     chmod +x "$DEPLOY_PT_SCRIPT"
-    chmod +x "$DEPLOY_VLLM_SCRIPT"
     chmod +x "$UPGRADE_SCRIPT"
     
-    echo -e "✓ 推理脚本生成成功！"
+    echo -e "✓ 基础推理脚本生成成功！"
 }
 
 # 生成微调脚本
@@ -602,10 +648,9 @@ swift sft \\
     --dataloader_num_workers 4 \\
     --model_author swift \\
     --model_name swift-robot
-
 EOF
 
-    # 生成微调后推理参考脚本
+    # 生成微调后推理参考脚本 (修复了原脚本单引号EOF导致变量不展开的问题)
     cat > "$INFER_AFTER_FINETUNE_SCRIPT" << EOF
 #!/bin/bash
 # 微调后推理参考脚本
@@ -614,14 +659,13 @@ echo "请修改 /path/to/fine-tuned-lora 为实际的路径"
 
 # 修改 /path/to/fine-tuned-lora 为实际的路径
 # 示例路径: /root/lora/v0-20251010-101010/checkpoint-95
-CUDA_VISIBLE_DEVICES=0 \
-swift infer \
-    --adapters /path/to/fine-tuned-lora \
-    --model_type "$MODEL_TYPE" \
-    --stream true \
-    --temperature 0 \
+CUDA_VISIBLE_DEVICES=0 \\
+swift infer \\
+    --adapters /path/to/fine-tuned-lora \\
+    --model_type "$MODEL_TYPE" \\
+    --stream true \\
+    --temperature 0 \\
     --max_new_tokens 2048
-
 EOF
 
     # 生成合并微调脚本
@@ -630,14 +674,13 @@ EOF
 # 合并微调脚本
 
 echo "请修改 /path/to/fine-tuned-lora 为实际的路径"
-echo "示例路径：  /root/big-models/Qwen/Qwen3-0.6B/lora/v0-20251020-101010/checkpoint-94"
+echo "示例路径：  /root/big-models/Qwen/Qwen2.5-7B-Instruct/lora/v0-20251020-101010/checkpoint-94"
 echo "---------------------"
 echo "合并后模型路径，请查看输出文本。"
-echo "合并示例提示（以实际为准）： [INFO:swift] Successfully merged LoRA and saved in /root/big-models/Qwen/Qwen3-0.6B/lora/v0-20251010-101010/checkpoint-94-merged."
-swift export \
-    --adapters /path/to/fine-tuned-lora \
+echo "合并示例提示（以实际为准）： [INFO:swift] Successfully merged LoRA and saved in /root/big-models/Qwen/Qwen2.5-7B-Instruct/lora/v0-20251010-101010/checkpoint-94-merged."
+swift export \\
+    --adapters /path/to/fine-tuned-lora \\
     --merge_lora true
-
 EOF
 
     # 赋予执行权限
@@ -645,12 +688,12 @@ EOF
     chmod +x "$INFER_AFTER_FINETUNE_SCRIPT"
     chmod +x "$MERGE_FINETUNE_SCRIPT"
     
-    echo "✓ 微调脚本生成成功！"
-    echo "脚本位置: $SCRIPTS_DIR"
-    echo "包含以下脚本:"
-    echo "  • $FINETUNE_SCRIPT (微调脚本)"
-    echo "  • $INFER_AFTER_FINETUNE_SCRIPT (微调后推理参考脚本)"
-    echo "  • $MERGE_FINETUNE_SCRIPT (合并微调脚本)"
+    echo -e "✓ 微调脚本生成成功！"
+    echo -e "脚本位置: $SCRIPTS_DIR"
+    echo -e "包含以下脚本:"
+    echo -e "  • $FINETUNE_SCRIPT (微调脚本)"
+    echo -e "  • $INFER_AFTER_FINETUNE_SCRIPT (微调后推理参考脚本)"
+    echo -e "  • $MERGE_FINETUNE_SCRIPT (合并微调脚本)"
 }
 
 # 显示完成信息
@@ -661,54 +704,83 @@ show_completion() {
 
 模型已成功下载并配置完毕。
 
-您可以使用以下命令进行推理：
+您可以使用以下命令进行操作：
 
 1. PT引擎命令行推理:
-$ chmod +x $TARGET_DIR/scripts/1-命令行推理-pt.sh
-$ $TARGET_DIR/scripts/1-命令行推理-pt.sh
+   $ chmod +x $TARGET_DIR/scripts/1-命令行推理-pt.sh
+   $ $TARGET_DIR/scripts/1-命令行推理-pt.sh
 
+EOF
+
+    if [[ "$USE_VLLM" == "y" || "$USE_VLLM" == "Y" ]]; then
+        cat << EOF
 2. VLLM引擎命令行推理:
-$ chmod +x $TARGET_DIR/scripts/1-命令行推理-vllm.sh
-$ $TARGET_DIR/scripts/1-命令行推理-vllm.sh
+   $ chmod +x $TARGET_DIR/scripts/1-命令行推理-vllm.sh
+   $ $TARGET_DIR/scripts/1-命令行推理-vllm.sh
 
 3. PT引擎Web界面:
-$ chmod +x $TARGET_DIR/scripts/2-界面推理-pt.sh
-$ $TARGET_DIR/scripts/2-界面推理-pt.sh
+   $ chmod +x $TARGET_DIR/scripts/2-界面推理-pt.sh
+   $ $TARGET_DIR/scripts/2-界面推理-pt.sh
 
 4. VLLM引擎Web界面:
-$ chmod +x $TARGET_DIR/scripts/2-界面推理-vllm.sh
-$ $TARGET_DIR/scripts/2-界面推理-vllm.sh
+   $ chmod +x $TARGET_DIR/scripts/2-界面推理-vllm.sh
+   $ $TARGET_DIR/scripts/2-界面推理-vllm.sh
 
 5. PT引擎API服务:
-$ chmod +x $TARGET_DIR/scripts/3-API接口-pt.sh
-$ $TARGET_DIR/scripts/3-API接口-pt.sh
+   $ chmod +x $TARGET_DIR/scripts/3-API接口-pt.sh
+   $ $TARGET_DIR/scripts/3-API接口-pt.sh
 
 6. VLLM引擎API服务:
-$ chmod +x $TARGET_DIR/scripts/3-API接口-vllm.sh
-$ $TARGET_DIR/scripts/3-API接口-vllm.sh
+   $ chmod +x $TARGET_DIR/scripts/3-API接口-vllm.sh
+   $ $TARGET_DIR/scripts/3-API接口-vllm.sh
+EOF
+    else
+        cat << EOF
+2. PT引擎Web界面:
+   $ chmod +x $TARGET_DIR/scripts/2-界面推理-pt.sh
+   $ $TARGET_DIR/scripts/2-界面推理-pt.sh
+
+3. PT引擎API服务:
+   $ chmod +x $TARGET_DIR/scripts/3-API接口-pt.sh
+   $ $TARGET_DIR/scripts/3-API接口-pt.sh
+
+   (注: 您选择了不生成 vLLM 脚本。如需使用 vLLM，请重新运行本工具并选择 y)
+EOF
+    fi
+
+    if [[ "$NEED_FINETUNE" == "y" || "$NEED_FINETUNE" == "Y" ]]; then
+        cat << EOF
 
 7. 微调模型:
-$ chmod +x $TARGET_DIR/scripts/4-微调.sh
-$ $TARGET_DIR/scripts/4-微调.sh
+   $ chmod +x $TARGET_DIR/scripts/4-微调.sh
+   $ $TARGET_DIR/scripts/4-微调.sh
 
 8. 微调后推理:
-$ # 首先编辑 $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
-$ # 将 /path/to/fine-tuned-lora 替换为实际的微调检查点路径
-$ chmod +x $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
-$ $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
+   $ # 首先编辑 $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
+   $ # 将 /path/to/fine-tuned-lora 替换为实际的微调检查点路径
+   $ chmod +x $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
+   $ $TARGET_DIR/scripts/5-微调后推理-需修改路径.sh
 
 9. 合并微调结果:
-$ # 首先编辑 $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
-$ # 将 /path/to/fine-tuned-lora 替换为实际的微调检查点路径
-$ chmod +x $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
-$ $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
+   $ # 首先编辑 $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
+   $ # 将 /path/to/fine-tuned-lora 替换为实际的微调检查点路径
+   $ chmod +x $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
+   $ $TARGET_DIR/scripts/6-合并微调-需修改路径.sh
+EOF
+    else
+        cat << EOF
 
-10. 升级ms-swift:
-$ chmod +x /root/7-升级_ms_swift.sh
-$ /root/7-升级_ms_swift.sh
+(注: 您选择了跳过微调配置。如需微调，请重新运行本工具并选择 y)
+EOF
+    fi
 
-感谢使用一锤定音大模型工具 (CHUIZIDAIMA，公众号：锤子代码)！
+    cat << EOF
 
+10. 升级 ms-swift:
+   $ chmod +x /root/7-升级_ms_swift.sh
+   $ /root/7-升级_ms_swift.sh
+
+感谢使用一锤定音大模型工具 (CHUIZI，公众号：锤子代码)！
 EOF
 }
 
@@ -722,9 +794,20 @@ main() {
     select_save_path
     select_download_option
     download_model
+    
+    # 下载完成后，询问进阶选项
+    ask_finetune_option
+    ask_vllm_option
+    
+    # 生成脚本
     generate_inference_scripts
-    configure_finetune_params
-    generate_finetune_scripts
+    
+    # 根据用户选择，决定是否生成微调脚本
+    if [[ "$NEED_FINETUNE" == "y" || "$NEED_FINETUNE" == "Y" ]]; then
+        configure_finetune_params
+        generate_finetune_scripts
+    fi
+    
     show_completion
 }
 

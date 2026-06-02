@@ -628,7 +628,6 @@ CUDA_VISIBLE_DEVICES=0 \\
 swift sft \\
     --model "$TARGET_DIR" \\
     --model_type "$MODEL_TYPE" \\
-    --train_type lora \\
     --dataset $DATASETS \\
     --torch_dtype bfloat16 \\
     --num_train_epochs $NUM_EPOCHS \\

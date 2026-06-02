@@ -504,7 +504,7 @@ EOF
 # 模型: $MODEL_ID
 # 模型类型: $MODEL_TYPE
 
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend pt --server_port 6006
 EOF
 
     # 3. 生成PT引擎API部署脚本 (总是生成)
@@ -518,7 +518,8 @@ CUDA_VISIBLE_DEVICES=0 swift deploy \\
     --model "$TARGET_DIR" \\
     --model_type "$MODEL_TYPE" \\
     --infer_backend pt \\
-    --served_model_name $MODEL_NAME
+    --served_model_name $MODEL_NAME \\
+    --port 6008
 EOF
 
     # 4. 根据用户选择生成 VLLM 脚本
@@ -544,7 +545,7 @@ EOF
 # 模型: $MODEL_ID
 # 模型类型: $MODEL_TYPE
 
-swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096
+swift app --model '$TARGET_DIR' --model_type '$MODEL_TYPE' --studio_title '$MODEL_NAME' --lang zh --max_new_tokens 2048 --infer_backend vllm --vllm_max_model_len 4096 --server_port 6006
 EOF
 
         cat > "$DEPLOY_VLLM_SCRIPT" << EOF
@@ -558,7 +559,8 @@ CUDA_VISIBLE_DEVICES=0 swift deploy \\
     --model_type "$MODEL_TYPE" \\
     --infer_backend vllm \\
     --served_model_name $MODEL_NAME \\
-    --vllm_max_model_len 4096
+    --vllm_max_model_len 4096 \\
+    --port 6008
 EOF
         chmod +x "$INFERENCE_VLLM_SCRIPT"
         chmod +x "$APP_VLLM_SCRIPT"
